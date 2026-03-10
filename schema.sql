@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS feeds (
 CREATE TABLE IF NOT EXISTS user_feeds (
   user_id TEXT NOT NULL,
   feed_id TEXT NOT NULL,
+  list_name TEXT DEFAULT 'Default',
   is_active INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, feed_id),

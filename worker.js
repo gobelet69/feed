@@ -33,15 +33,16 @@ export default {
             });
         }
 
-        // ── API: SUBSCRIBING & MANAGING FEEDS ────────────────────────────────
+        // ---------------- API ROUTES ----------------CRIBING & MANAGING FEEDS ────────────────────────────────
 
         if (path === '/api/feed/subscribe' && method === 'POST') {
             const fd = await req.formData();
             const feed_id = fd.get('feed_id');
+            const list_name = fd.get('list_name') || 'Default';
             await env.DB.prepare(
-                'INSERT INTO user_feeds (user_id, feed_id, is_active, created_at) VALUES (?, ?, 1, ?) ' +
-                'ON CONFLICT(user_id, feed_id) DO UPDATE SET is_active = 1'
-            ).bind(user.username, feed_id, Date.now()).run();
+                'INSERT INTO user_feeds (user_id, feed_id, list_name, is_active, created_at) VALUES (?, ?, ?, 1, ?) ' +
+                'ON CONFLICT(user_id, feed_id) DO UPDATE SET is_active = 1, list_name = ?'
+            ).bind(user.username, feed_id, list_name, Date.now(), list_name).run();
             return new Response('OK');
         }
 
@@ -54,9 +55,20 @@ export default {
             return new Response('OK');
         }
 
+        if (path === '/api/feed/move' && method === 'POST') {
+            const fd = await req.formData();
+            const feed_id = fd.get('feed_id');
+            const list_name = fd.get('list_name') || 'Default';
+            await env.DB.prepare(
+                'UPDATE user_feeds SET list_name = ? WHERE user_id = ? AND feed_id = ?'
+            ).bind(list_name, user.username, feed_id).run();
+            return new Response('OK');
+        }
+
         if (path === '/api/feed/add' && method === 'POST') {
             const fd = await req.formData();
             const textRaw = fd.get('urls');
+            const list_name = fd.get('list_name') || 'Default';
             if (!textRaw) return new Response('Missing URLs', { status: 400 });
 
             // Split by newline, trim, filter empty lines
@@ -89,8 +101,8 @@ export default {
                         // Instantly seed some articles so it's not empty
                         for (const item of rs.items.slice(0, 15)) {
                             await env.DB.prepare(
-                                'INSERT OR IGNORE INTO articles (id, feed_id, title, url, published_at, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-                            ).bind(crypto.randomUUID(), feed_id, item.title, item.link, item.published_at, Date.now()).run();
+                                'INSERT OR IGNORE INTO articles (id, feed_id, title, url, image_url, published_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+                            ).bind(crypto.randomUUID(), feed_id, item.title, item.link, item.image_url || null, item.published_at, Date.now()).run();
                         }
                     } catch (err) {
                         errors.push(`Failed ${feedUrl}: ${err.message}`);
@@ -100,9 +112,9 @@ export default {
 
                 // Auto subscribe user
                 await env.DB.prepare(
-                    'INSERT INTO user_feeds (user_id, feed_id, is_active, created_at) VALUES (?, ?, 1, ?) ' +
-                    'ON CONFLICT(user_id, feed_id) DO UPDATE SET is_active = 1'
-                ).bind(user.username, feed_id, Date.now()).run();
+                    'INSERT INTO user_feeds (user_id, feed_id, list_name, is_active, created_at) VALUES (?, ?, ?, 1, ?) ' +
+                    'ON CONFLICT(user_id, feed_id) DO UPDATE SET is_active = 1, list_name = ?'
+                ).bind(user.username, feed_id, list_name, Date.now(), list_name).run();
 
                 addedCount++;
             }
@@ -128,33 +140,50 @@ export default {
 
             // Get user's subscriptions
             const { results: userFeeds } = await env.DB.prepare(
-                'SELECT feed_id, is_active FROM user_feeds WHERE user_id = ?'
+                'SELECT feed_id, list_name, is_active FROM user_feeds WHERE user_id = ?'
             ).bind(user.username).all();
 
             const subscribedFeedIds = userFeeds.filter(uf => uf.is_active === 1).map(uf => uf.feed_id);
             const userFeedMap = {};
-            userFeeds.forEach(uf => userFeedMap[uf.feed_id] = uf.is_active);
+            const userListMap = {};
+            userFeeds.forEach(uf => {
+                userFeedMap[uf.feed_id] = uf.is_active;
+                userListMap[uf.feed_id] = uf.list_name || 'Default';
+            });
 
             // Get all feeds globally
             const { results: allFeeds } = await env.DB.prepare('SELECT * FROM feeds ORDER BY name ASC').all();
 
             // Render articles only if we are on Dashboard (and user is subscribed to some feeds)
             let articles = [];
+            let allLists = [];
+            let currentList = url.searchParams.get('list') || 'All';
+
             if (!isDiscover && subscribedFeedIds.length > 0) {
-                const placeholders = subscribedFeedIds.map(() => '?').join(',');
-                const query = `
-                    SELECT a.id, a.title, a.url, a.published_at, f.name as feed_name, f.icon as feed_icon 
-                    FROM articles a
-                    JOIN feeds f ON a.feed_id = f.id
-                    WHERE a.feed_id IN (${placeholders})
-                    ORDER BY a.published_at DESC
-                    LIMIT 200`
-                    ;
-                const { results } = await env.DB.prepare(query).bind(...subscribedFeedIds).all();
-                articles = results;
+                let activeSubscriptions = userFeeds.filter(uf => uf.is_active === 1);
+                allLists = ['All', ...new Set(activeSubscriptions.map(uf => uf.list_name || 'Default'))].sort();
+
+                if (currentList !== 'All') {
+                    activeSubscriptions = activeSubscriptions.filter(uf => (uf.list_name || 'Default') === currentList);
+                }
+                const filterIds = activeSubscriptions.map(uf => uf.feed_id);
+
+                if (filterIds.length > 0) {
+                    const placeholders = filterIds.map(() => '?').join(',');
+                    const query = `
+                        SELECT a.id, a.title, a.url, a.image_url, a.published_at, f.name as feed_name, f.icon as feed_icon 
+                        FROM articles a
+                        JOIN feeds f ON a.feed_id = f.id
+                        WHERE a.feed_id IN (${placeholders})
+                        ORDER BY a.published_at DESC
+                        LIMIT 200`
+                        ;
+                    const { results } = await env.DB.prepare(query).bind(...filterIds).all();
+                    articles = results;
+                }
             }
 
-            return new Response(renderPage(user, allFeeds, userFeedMap, articles, isDiscover), {
+            return new Response(renderPage(user, allFeeds, userFeedMap, userListMap, articles, isDiscover, allLists, currentList), {
                 headers: { 'Content-Type': 'text/html; charset=utf-8' }
             });
         }
@@ -177,8 +206,8 @@ export default {
                 for (const item of rs.items.slice(0, 15)) { // take top 15 from each
                     // Insert or ignore if URL already exists
                     await env.DB.prepare(
-                        'INSERT OR IGNORE INTO articles (id, feed_id, title, url, published_at, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-                    ).bind(crypto.randomUUID(), feed.id, item.title, item.link, item.published_at, Date.now()).run();
+                        'INSERT OR IGNORE INTO articles (id, feed_id, title, url, image_url, published_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+                    ).bind(crypto.randomUUID(), feed.id, item.title, item.link, item.image_url || null, item.published_at, Date.now()).run();
                 }
             } catch (err) {
                 console.error(`Failed to fetch feed ${feed.url}: ${err.message}`);
@@ -218,14 +247,16 @@ async function fetchAndParseRSS(feedUrl) {
         let title = '';
         let link = '';
         let pubDateStr = '';
+        let image_url = '';
 
         const itemTitleMatch = itemHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
         if (itemTitleMatch) title = itemTitleMatch[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>|&[^;]+;/gi, '$1').replace(/(<([^>]+)>)/gi, "").trim();
 
         // extract link. RSS uses <link>url</link>, Atom uses <link href="url" />
         const stdLinkMatch = itemHtml.match(/<link[^>]*>([^<]+)<\/link>/i);
-        if (stdLinkMatch && stdLinkMatch[1].trim() !== '') {
-            link = stdLinkMatch[1].trim();
+        // Sometimes RSS embeds CDATA inside link
+        if (stdLinkMatch && stdLinkMatch[1].trim() !== '' && !stdLinkMatch[1].includes('href=')) {
+            link = stdLinkMatch[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim();
         } else {
             const atomLinkMatch = itemHtml.match(/<link[^>]+href=["']([^"']+)["'][^>]*>/i);
             if (atomLinkMatch) link = atomLinkMatch[1];
@@ -234,6 +265,23 @@ async function fetchAndParseRSS(feedUrl) {
         const pubDateMatch = itemHtml.match(/<(?:pubdate|published|updated)[^>]*>([^<]+)<\/(?:pubdate|published|updated)>/i);
         if (pubDateMatch) pubDateStr = pubDateMatch[1].trim();
 
+        // --- IMAGE EXTRACTION ---
+        // 1. Try <media:content url="..."> or <media:thumbnail url="...">
+        const mediaMatch = itemHtml.match(/<media:(?:content|thumbnail)[^>]+url=["']([^"']+)["'][^>]*>/i);
+        if (mediaMatch) {
+            image_url = mediaMatch[1];
+        } else {
+            // 2. Try falling back to extracting the first <img src="..."> anywhere in the item string
+            // Decode basic entities first because ATOM feeds often use &lt;img src=&quot;...&quot;&gt;
+            const decodedHtml = itemHtml.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&apos;/g, "'").replace(/&#39;/g, "'");
+            const imgMatch = decodedHtml.match(/<img[^>]+src=["']([^"']+)["']/i);
+
+            if (imgMatch) {
+                // Decode url &amp; entities
+                image_url = imgMatch[1].replace(/&amp;/g, '&').replace(/&#038;/g, '&');
+            }
+        }
+
         let published_at = Date.now();
         if (pubDateStr) {
             const parsed = new Date(pubDateStr).getTime();
@@ -241,7 +289,7 @@ async function fetchAndParseRSS(feedUrl) {
         }
 
         if (title && link) {
-            items.push({ title, link, published_at });
+            items.push({ title, link, image_url, published_at });
         }
     }
     return { title: feedTitle || 'Feed', items };
@@ -313,33 +361,51 @@ button,input[type=submit]{cursor:pointer;font-family:inherit}
 
 /* ARTICLES LIST */
 .article-group{margin-bottom:16px;animation:slideUp .4s ease-out backwards}
-.article-card{display:flex;flex-direction:column;gap:10px;background:var(--card);border:1px solid var(--border);
-  padding:20px;border-radius:16px;text-decoration:none;color:var(--txt);transition:all .2s;
-  position:relative;overflow:hidden}
+.article-card{display:flex;flex-direction:row;gap:16px;background:var(--card);border:1px solid var(--border);
+  padding:16px;border-radius:16px;text-decoration:none;color:var(--txt);transition:all .2s;
+  position:relative;overflow:hidden;align-items:center}
 .article-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;
   background:transparent;transition:background .2s}
 .article-card:hover{border-color:rgba(139,92,246,.4);transform:translateY(-2px);
-  box-shadow:0 12px 32px rgba(0,0,0,.3)}
+  box-shadow:0 12px 32px rgba(0,0,0,.3);background:var(--card2)}
 .article-card:hover::before{background:var(--p)}
+
+.article-image-wrap{width:130px;height:90px;flex-shrink:0;border-radius:10px;overflow:hidden;
+  background:rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--border)}
+.article-image{width:100%;height:100%;object-fit:cover;transition:transform .4s}
+.article-card:hover .article-image{transform:scale(1.05)}
+
+.article-content{display:flex;flex-direction:column;flex:1;min-width:0;justify-content:center;gap:6px}
 .article-meta{display:flex;align-items:center;gap:8px;font-size:0.85em;color:var(--muted);font-weight:500}
 .feed-icon{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
   background:rgba(255,255,255,0.1);border-radius:6px;font-size:14px}
-.article-title{font-size:1.15em;font-weight:700;line-height:1.4}
+.article-title{font-size:1.1em;font-weight:700;line-height:1.35;margin-bottom:2px}
 .article-domain{font-size:0.8em;color:var(--dim)}
 
-/* DISCOVER LIST */
-.discover-grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(300px, 1fr));gap:16px}
-.feed-card{background:var(--card);border:1px solid var(--border);padding:24px;border-radius:16px;
-  display:flex;align-items:center;justify-content:space-between;gap:16px;transition:all .2s}
-.feed-card:hover{border-color:var(--border);background:var(--card2)}
+/* DISCOVER LIST & UX */
+.feed-section-title{font-size:1.2em;font-weight:700;color:var(--txt);margin:32px 0 16px;display:flex;align-items:center;gap:8px}
+.feed-list{display:flex;flex-direction:column;gap:12px;margin-bottom:48px}
+.feed-row{background:var(--card);border:1px solid var(--border);padding:16px 20px;border-radius:16px;
+  display:flex;align-items:center;justify-content:space-between;gap:24px;transition:all .2s}
+.feed-row:hover{border-color:rgba(139,92,246,.3);background:var(--card2);transform:translateX(4px)}
 .feed-info{display:flex;align-items:center;gap:16px;flex:1;min-width:0}
-.feed-icon-large{font-size:2em;width:48px;height:48px;display:flex;align-items:center;
+.feed-icon-large{font-size:1.8em;width:44px;height:44px;display:flex;align-items:center;
   justify-content:center;background:rgba(255,255,255,0.05);border-radius:12px;flex-shrink:0}
 .feed-text{display:flex;flex-direction:column;min-width:0}
-.feed-name{font-weight:700;font-size:1.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.feed-url{font-size:0.8em;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.feed-name{font-weight:700;font-size:1.1em;line-height:1.3;margin-bottom:2px}
+.feed-url{font-size:0.85em;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:monospace}
+.feed-actions{display:flex;align-items:center;gap:12px;flex-shrink:0}
 .btn-toggle[data-active="true"]{background:var(--p);color:#fff;border-color:var(--p)}
 .btn-toggle[data-active="false"]{background:transparent;color:var(--txt);border:1px solid var(--border)}
+
+.list-badge{font-size:0.85em;color:var(--muted);background:rgba(255,255,255,0.05);padding:6px 14px;border-radius:20px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:all .2s;border:1px solid transparent;font-weight:600}
+.list-badge:hover{background:rgba(139,92,246,0.1);color:#a78bfa;border-color:rgba(139,92,246,0.3)}
+.list-tabs{display:flex;gap:8px;margin-bottom:24px;overflow-x:auto;padding-bottom:8px}
+.list-tabs::-webkit-scrollbar{display:none}
+.list-tab{padding:8px 16px;border-radius:20px;background:rgba(255,255,255,0.03);color:var(--muted);font-size:0.9em;font-weight:600;text-decoration:none;transition:all .2s;white-space:nowrap;border:1px solid var(--border)}
+.list-tab:hover{background:rgba(255,255,255,0.08);color:var(--txt)}
+.list-tab.active{background:var(--txt);color:var(--bg);border-color:var(--txt)}
 
 /* MODALS & FORMS */
 input[type=text],input[type=url],textarea{
@@ -415,7 +481,7 @@ function renderHeader(username, isDiscover) {
       </a>
       <div class="dd-sep"></div>
       <a href="/auth/logout" class="ddl out">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         Sign Out
       </a>
     </div>
@@ -423,15 +489,46 @@ function renderHeader(username, isDiscover) {
   <script>document.addEventListener('click',e=>{const w=document.getElementById('${id}');if(w&&!w.contains(e.target))w.classList.remove('open');});</script>`;
 }
 
-function renderPage(user, allFeeds, userFeedMap, articles, isDiscover) {
+function renderPage(user, allFeeds, userFeedMap, userListMap, articles, isDiscover, allLists, currentList) {
     let mainHtml = '';
 
     if (isDiscover) {
+        // Group Active Feeds by List Name
+        const groupedSubscriptions = {};
+        const unsubscribedFeeds = [];
+
+        allFeeds.forEach(f => {
+            if (userFeedMap[f.id] === 1) {
+                const list = userListMap[f.id] || 'Default';
+                if (!groupedSubscriptions[list]) groupedSubscriptions[list] = [];
+                groupedSubscriptions[list].push(f);
+            } else {
+                unsubscribedFeeds.push(f);
+            }
+        });
+
+        const renderFeedRow = (f, isActive) => `
+          <div class="feed-row">
+            <div class="feed-info">
+              <div class="feed-icon-large">${esc(f.icon)}</div>
+              <div class="feed-text">
+                <div class="feed-name">${esc(f.name)}</div>
+                <div class="feed-url">${esc(f.url.replace(/^https?:\/\//, ''))}</div>
+              </div>
+            </div>
+            <div class="feed-actions">
+              ${isActive ? `<span class="list-badge" onclick="moveFeed('${f.id}', '${esc(userListMap[f.id])}')">${esc(userListMap[f.id])} <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></span>` : ''}
+              <button class="btn btn-toggle" data-active="${isActive}" onclick="toggleFeed('${f.id}', ${isActive})">
+                ${isActive ? 'Subscribed' : 'Subscribe'}
+              </button>
+            </div>
+          </div>`;
+
         mainHtml = `
         <div class="top-bar">
           <div>
             <h1 class="page-title">Manage Feeds</h1>
-            <p class="page-sub">Discover and subscribe to top RSS feeds globally across 111iridescence.</p>
+            <p class="page-sub">Organize your reading list and discover top RSS feeds across 111iridescence.</p>
           </div>
           <button class="btn btn-primary" onclick="openAddModal()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -439,25 +536,29 @@ function renderPage(user, allFeeds, userFeedMap, articles, isDiscover) {
           </button>
         </div>
         
-        <div class="discover-grid">
-          ${allFeeds.length === 0 ? '<p style="color:var(--muted)">No feeds exist globally yet. Be the first to add one!</p>' : ''}
-          ${allFeeds.map(f => {
-            const isActive = userFeedMap[f.id] === 1;
-            return `
-              <div class="feed-card">
-                <div class="feed-info">
-                  <div class="feed-icon-large">${esc(f.icon)}</div>
-                  <div class="feed-text">
-                    <div class="feed-name">${esc(f.name)}</div>
-                    <div class="feed-url">${esc(f.url.replace(/^https?:\/\//, ''))}</div>
-                  </div>
-                </div>
-                <button class="btn btn-toggle" data-active="${isActive}" onclick="toggleFeed('${f.id}', ${isActive})">
-                  ${isActive ? 'Subscribed' : 'Subscribe'}
-                </button>
-              </div>`;
-        }).join('')}
-        </div>
+        <!-- SUBSCRIBED FEEDS GROUPED BY LIST -->
+        ${Object.keys(groupedSubscriptions).sort().map(listName => `
+            <div class="feed-section-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" color="var(--p)"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              ${esc(listName)} List
+            </div>
+            <div class="feed-list">
+              ${groupedSubscriptions[listName].map(f => renderFeedRow(f, true)).join('')}
+            </div>
+        `).join('')}
+
+        ${Object.keys(groupedSubscriptions).length === 0 ? '<p style="color:var(--muted);margin-bottom:48px">You have no active subscriptions. Browse below to add some!</p>' : ''}
+
+        <!-- UNSUBSCRIBED / GLOBAL FEEDS -->
+        ${unsubscribedFeeds.length > 0 ? `
+            <div class="feed-section-title" style="margin-top:24px;opacity:0.8">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+              Discover Global Feeds
+            </div>
+            <div class="feed-list">
+              ${unsubscribedFeeds.map(f => renderFeedRow(f, false)).join('')}
+            </div>
+        ` : ''}
         `;
     } else {
         const hasSubscriptions = Object.values(userFeedMap).some(v => v === 1);
@@ -487,18 +588,29 @@ function renderPage(user, allFeeds, userFeedMap, articles, isDiscover) {
               </div>
             </div>
             
+            <div class="list-tabs">
+              ${allLists.map(l => `<a href="?list=${encodeURIComponent(l)}" class="list-tab ${l === currentList ? 'active' : ''}">${esc(l)}</a>`).join('')}
+            </div>
+
             <div style="display:flex;flex-direction:column;gap:16px;">
               ${articles.map((a, i) => `
               <div class="article-group" style="animation-delay:${i * 0.04}s">
                 <a class="article-card" href="${esc(a.url)}" target="_blank" rel="noopener">
-                  <div class="article-meta">
-                    <span class="feed-icon">${esc(a.feed_icon)}</span>
-                    <span style="color:var(--txt)">${esc(a.feed_name)}</span>
-                    <span>•</span>
-                    <span>${timeAgo(a.published_at)}</span>
+                  ${a.image_url ? `
+                  <div class="article-image-wrap">
+                    <img src="${esc(a.image_url)}" class="article-image" alt="Cover Image" loading="lazy" onerror="this.style.display='none'">
+                  </div>` : ''}
+                  
+                  <div class="article-content">
+                    <div class="article-meta">
+                      <span class="feed-icon">${esc(a.feed_icon)}</span>
+                      <span style="color:var(--txt)">${esc(a.feed_name)}</span>
+                      <span>•</span>
+                      <span>${timeAgo(a.published_at)}</span>
+                    </div>
+                    <h2 class="article-title">${esc(a.title)}</h2>
+                    <div class="article-domain">${esc(new URL(a.url).hostname.replace('www.', ''))}</div>
                   </div>
-                  <h2 class="article-title">${esc(a.title)}</h2>
-                  <div class="article-domain">${esc(new URL(a.url).hostname.replace('www.', ''))}</div>
                 </a>
               </div>`).join('')}
             </div>`;
@@ -526,6 +638,10 @@ function renderPage(user, allFeeds, userFeedMap, articles, isDiscover) {
         <div class="form-group">
           <label>RSS Feed URLs</label>
           <textarea name="urls" rows="4" placeholder="https://news.ycombinator.com/rss&#10;https://www.theverge.com/rss/index.xml" required autofocus style="resize:vertical"></textarea>
+        </div>
+        <div class="form-group">
+          <label>List / Category Name (Optional)</label>
+          <input type="text" name="list_name" placeholder="Default" value="Default">
         </div>
         <div class="form-group">
           <label>Custom Name (Optional - Only applies if adding 1 Feed)</label>
@@ -561,6 +677,17 @@ function renderPage(user, allFeeds, userFeedMap, articles, isDiscover) {
       
       const r = await fetch(BASE + endpoint, { method: 'POST', body: fd });
       if (r.ok) location.reload(); else alert('Error updating subscription');
+    }
+
+    async function moveFeed(feedId, currentList) {
+      const newList = prompt('Enter new list name:', currentList);
+      if (newList !== null && newList.trim() !== '' && newList !== currentList) {
+        const fd = new FormData();
+        fd.append('feed_id', feedId);
+        fd.append('list_name', newList.trim());
+        const r = await fetch(BASE + '/api/feed/move', { method: 'POST', body: fd });
+        if (r.ok) location.reload(); else alert('Error moving feed');
+      }
     }
 
     async function submitFeed(form) {
