@@ -1,0 +1,28 @@
+{
+    "name": "feed",
+    "main": "worker.js",
+    "compatibility_date": "2024-09-23",
+    "d1_databases": [
+        {
+            "binding": "AUTH_DB",
+            "database_name": "global-auth",
+            "database_id": "ba736065-1d46-450b-a083-efc8ba935939"
+        },
+        {
+            "binding": "DB",
+            "database_name": "feed",
+            "database_id": "103986bb-48b7-4029-8232-7f48a3f6bb3f"
+        }
+    ],
+    "triggers": {
+        "crons": [
+            "*/15 * * * *"
+        ]
+    },
+    "routes": [
+        {
+            "pattern": "111iridescence.org/feed*",
+            "zone_name": "111iridescence.org"
+        }
+    ]
+}
