@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS articles (
   feed_id TEXT NOT NULL,
   title TEXT NOT NULL,
   url TEXT NOT NULL UNIQUE,
+  image_url TEXT,
   published_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
