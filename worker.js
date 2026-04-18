@@ -452,6 +452,7 @@ function timeAgo(ms) {
 
 function renderHeader(username, isDiscover) {
     const id = 'cuw';
+    const appsId = 'fapps';
     return `
   <div style="display:flex;align-items:center;gap:32px;">
     <a href="/feed" style="text-decoration:none;display:flex;align-items:center;gap:12px;">
@@ -465,28 +466,54 @@ function renderHeader(username, isDiscover) {
       <a href="/feed/discover" class="nav-link ${isDiscover ? 'active' : ''}">Manage Feeds</a>
     </div>
   </div>
-  <div class="user-wrap" id="${id}">
-    <button class="user-btn" onclick="document.getElementById('${id}').classList.toggle('open')">
-      ${esc(username)}
-      <svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-    </button>
-    <div class="dd">
-      <div class="dd-hdr">
-        <div class="dd-name">${esc(username)}</div>
-        <div class="dd-sub">111 Feed</div>
+  <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+    <div class="user-wrap" id="${id}">
+      <button class="user-btn" onclick="document.getElementById('${id}').classList.toggle('open')">
+        ${esc(username)}
+        <svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="dd">
+        <div class="dd-hdr">
+          <div class="dd-name">${esc(username)}</div>
+          <div class="dd-sub">111 Feed</div>
+        </div>
+        <a href="/auth/account" class="ddl">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
+          Account Preferences
+        </a>
+        <a href="/auth/admin" class="ddl">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          Admin Panel
+        </a>
+        <div class="dd-sep"></div>
+        <a href="/auth/logout" class="ddl out">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign Out
+        </a>
       </div>
-      <a href="/auth/account" class="ddl">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
-        Account Preferences
-      </a>
-      <div class="dd-sep"></div>
-      <a href="/auth/logout" class="ddl out">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        Sign Out
-      </a>
+    </div>
+    <div class="user-wrap" id="${appsId}">
+      <button class="user-btn" onclick="document.getElementById('${appsId}').classList.toggle('open')">
+        Apps
+        <svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="dd">
+        <div class="dd-hdr">
+          <div class="dd-name">Switch app</div>
+          <div class="dd-sub">111iridescence webapps</div>
+        </div>
+        <a href="/" class="ddl">🏠 Hub</a>
+        <a href="/vault" class="ddl">🔒 Vault</a>
+        <a href="/habits" class="ddl">📈 Habits</a>
+        <a href="/todo" class="ddl">✅ Todo</a>
+        <a href="/courses" class="ddl">🎓 Courses</a>
+        <a href="/editor" class="ddl">📝 Editor</a>
+        <a href="/dashboard" class="ddl">📊 Dashboard</a>
+        <a href="/feed" class="ddl">📰 Feed</a>
+      </div>
     </div>
   </div>
-  <script>document.addEventListener('click',e=>{const w=document.getElementById('${id}');if(w&&!w.contains(e.target))w.classList.remove('open');});</script>`;
+  <script>document.addEventListener('click',e=>{const w=document.getElementById('${id}');const a=document.getElementById('${appsId}');if(w&&!w.contains(e.target))w.classList.remove('open');if(a&&!a.contains(e.target))a.classList.remove('open');});</script>`;
 }
 
 function renderPage(user, allFeeds, userFeedMap, userListMap, articles, isDiscover, allLists, currentList) {
